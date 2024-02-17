@@ -1,0 +1,121 @@
+---
+title: "MK801 Genotype Processing"
+author: "vivek"
+date: "2/6/2021"
+output: html_document
+---
+B6J=c("C57BL/6J"), B6N=c("BALB/cJ"), name1="B6J", name2="BALB")
+is key
+the control genotype file for each strain needs to be added to each batch.
+the name of the strans need to agree within the file.
+ 
+if using new strains, make sure these are changed.
+
+
+
+
+# -------------------------------------------------
+# PREPROCESSING CODE
+# -------------------------------------------------
+
+### The new transnetyx genotype files have two new columns. 
+### In addition, Tom used numbers as AnimalID. This messes up the code.
+
+This code processes the Genotype files to fix these two things.
+1. It adds a `A_` to the `Sample Name`
+2. I delete two new columns.
+
+The processed data is placed in a new folder.  
+
+** NOTE: The controls need to be adjusted for this by adding the `A_` to the control ID
+
+```{r setup, include=FALSE}
+library(data.table)
+ 
+wd <- "/Users/vkumar/Box Sync/LAB/PSY todo/JCMS MK801 Analysis/MK801 Genotype Plate 1 analysis/33766-genotypes"
+setwd(wd)
+outputDir <- "../Processed"
+dir.create(file.path("../Processed/"), showWarnings = FALSE)
+
+
+inputfiles = list.files(wd, full.names=FALSE, pattern=".txt")
+
+for (inputfile in inputfiles){
+    tbl1 <- fread(inputfile, sep = '\t', colClasses = c("Sample Name" = "character"), skip = 0) # new on Feb 2024
+    names(tbl1)<-make.names(names(tbl1),unique = TRUE)
+
+    tbl1$Sample.Name <- paste("A", tbl1$Sample.Name, sep="_") # Added this because Tom has only numbers for Sample Name, this can be removed
+    tbl1 <- tbl1[, -c(3:4)] # added in 2024 to remove two 
+    
+    outfile1 <- paste(outputDir, inputfile, sep = "/")
+  write.table(tbl1, outfile1, row.names = FALSE, quote = FALSE, sep = "\t")
+  }
+
+
+```
+
+
+## correct the input file name to the folder of processed files from the code above
+## Asaf's code to combine the genotypes processed above
+ 
+```{r}
+ 
+filepath <- "/Users/vkumar/Box Sync/LAB/PSY todo/JCMS MK801 Analysis/MK801 Genotype Plate 1 analysis/Processed"
+
+setwd(filepath)
+ 
+inputfiles <- Sys.glob(paste0(filepath,"/*.txt"))
+ 
+read_neogen <- function(inputfiles, outfile, B6J=c("A_020269"), B6N=c("A_018606"), name1="B6J", name2="B6N"){
+  # Read Karl Broman analysis result with unique and mapped markers, save a list of the unique only
+  kb <- read.csv(url("https://raw.githubusercontent.com/kbroman/MUGAarrays/master/UWisc/mini_uwisc_v2.csv"))
+  kblist <- kb$marker[kb$unique & (!kb$unmapped)]
+  # Read the Neogen input file and write the genotypes matrix into the output csv file
+  tbl <- NULL
+  for (inputfile in inputfiles){
+    tbl1 <- read.delim(inputfile, skip = 1, header = F)
+    tbl <- rbind(tbl, tbl1)
+  }
+  w3 <- reshape(tbl[,c(1:2,4)], v.names="V4", idvar = "V1", timevar="V2", direction="wide")
+  rownames(w3) <- w3$V1
+  w3 <- w3[,-1]
+  colnames(w3) <- gsub("^V4.", "", colnames(w3))
+  #w3 <- t(w3)
+  w4 <- reshape(tbl[,c(1:2, 5)], v.names="V5", idvar = "V1", timevar="V2", direction="wide")
+  rownames(w4) <- w4$V1
+  w4 <- w4[,-1]
+  colnames(w4) <- gsub("^V5.", "", colnames(w4))
+  #w4 <- t(w4)
+   
+  # Find the B6J and B6N consensus. If one allele is different remove the marker
+  # If B6J==B6N remove the marker
+  keepr <- apply(w3[B6J, ,drop=F], 2, function(col) length(unique(col)) == 1) &
+    apply(w4[B6J, ,drop=F], 2, function(col) length(unique(col)) == 1) &
+    apply(w3[B6N, ,drop=F], 2, function(col) length(unique(col)) == 1) &
+    apply(w4[B6N, ,drop=F], 2, function(col) length(unique(col)) == 1) &
+    w3[B6J[1],] == w4[B6J[1],] &
+    w3[B6N[1],] == w4[B6N[1],] &
+    w3[B6J[1],] != w3[B6N[1],]
+   
+  # Set the allele names to A and B for B6J and B6N
+  w3 <- w3[, keepr]
+  w4 <- w4[, keepr]
+  d3 <- w3 == w3[rep(B6J[1],nrow(w3)), ]
+  d3[d3==TRUE] = "A"
+  d3[d3==FALSE] = "B"
+  d4 <- w4 == w4[rep(B6J[1],nrow(w4)), ]
+  d4[d4==TRUE] = "A"
+  d4[d4==FALSE] = "B"
+   
+  # Concatenate the two alleles
+  for (i in 1:nrow(d3)) d3[i,] <- paste0(d3[i,], d4[i,])
+  d3 <- d3[, intersect(colnames(d3), kblist)]
+  # Separate the founders and write them in the first two rows followed by the rest
+  dout <- rbind(d3[B6J[1],,drop=F], d3[B6N[1],,drop=F], d3[!rownames(d3) %in% c(B6N, B6J),])
+  rownames(dout) <- c(name1, name2, rownames(dout)[3:nrow(dout)])
+  write.csv(dout, file=outfile)
+}
+ 
+read_neogen(inputfiles,"new_outfile.csv")
+ 
+```
